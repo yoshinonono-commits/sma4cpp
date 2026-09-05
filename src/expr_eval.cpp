@@ -202,13 +202,13 @@ private:
     }
 
     std::unique_ptr<Node> parse_term() {
-        auto node = parse_power();
+        auto node = parse_unary();
         while (cur_.kind == Tok::Star || cur_.kind == Tok::Slash || cur_.kind == Tok::Percent) {
             BinOpKind op = cur_.kind == Tok::Star ? BinOpKind::Mul
                           : cur_.kind == Tok::Slash ? BinOpKind::Div
                                                      : BinOpKind::Mod;
             advance();
-            auto rhs = parse_power();
+            auto rhs = parse_unary();
             auto bin = std::make_unique<Node>();
             bin->type = NodeType::BinOp;
             bin->bin_op = op;
@@ -219,22 +219,14 @@ private:
         return node;
     }
 
-    // ** は右結合 (2**3**2 == 2**(3**2))。再帰で自然に右結合になる。
-    std::unique_ptr<Node> parse_power() {
-        auto lhs = parse_unary();
-        if (cur_.kind == Tok::StarStar) {
-            advance();
-            auto rhs = parse_power();
-            auto bin = std::make_unique<Node>();
-            bin->type = NodeType::BinOp;
-            bin->bin_op = BinOpKind::Pow;
-            bin->kids.push_back(std::move(lhs));
-            bin->kids.push_back(std::move(rhs));
-            return bin;
-        }
-        return lhs;
-    }
-
+    // 単項マイナスと ** の優先順位は Python に合わせる:
+    //   -x**2   は  -(x**2)     (「マイナスを 2 乗」ではない)
+    //   2**-1   は  2**(-1)
+    //   2**3**2 は  2**(3**2)   (** は右結合)
+    // そのため parse_unary が parse_power を呼び、power の右辺には再び単項を許す。
+    //
+    // 逆にすると (単項が ** より先に効くと) exp(-((x-b)/c)**2) が
+    // exp(+((x-b)/c)**2) と解釈されてしまい、ガウス関数のフィットが発散する。
     std::unique_ptr<Node> parse_unary() {
         if (cur_.kind == Tok::Minus || cur_.kind == Tok::Plus) {
             bool negate = cur_.kind == Tok::Minus;
@@ -246,7 +238,22 @@ private:
             node->kids.push_back(std::move(operand));
             return node;
         }
-        return parse_primary();
+        return parse_power();
+    }
+
+    std::unique_ptr<Node> parse_power() {
+        auto lhs = parse_primary();
+        if (cur_.kind == Tok::StarStar) {
+            advance();
+            auto rhs = parse_unary();
+            auto bin = std::make_unique<Node>();
+            bin->type = NodeType::BinOp;
+            bin->bin_op = BinOpKind::Pow;
+            bin->kids.push_back(std::move(lhs));
+            bin->kids.push_back(std::move(rhs));
+            return bin;
+        }
+        return lhs;
     }
 
     std::unique_ptr<Node> parse_primary() {

@@ -54,6 +54,32 @@ int main() {
             check(std::fabs(m(4) - 1.0) < 1e-9, "mod");
         }
 
+        section("単項マイナスと ** の優先順位 (Python と同じか)");
+        {
+            // ここは「パーサ自身で作った値」ではなく手計算の値と突き合わせる。
+            // 自分で生成したデータを自分で解釈すると、優先順位が逆でも辻褄が
+            // 合ってしまい、バグをすり抜けさせてしまうため。
+            struct Case { const char* expr; double x; double want; };
+            const Case cases[] = {
+                {"-x**2",   3.0, -9.0},     // -(3^2)。(-3)^2 = +9 ではない
+                {"2**-1",   0.0, 0.5},      // 2^(-1)
+                {"2**3**2", 0.0, 512.0},    // 2^(3^2) = 2^9 (** は右結合)
+                {"-2**2",   0.0, -4.0},
+                {"(-x)**2", 3.0, 9.0},      // 括弧で囲めばこちらは +9
+                // ガウス関数の形。マイナスが先に効かないと exp(+16) に発散する
+                {"exp(-((x-1)/1.5)**2)", 7.0, 1.1253517e-07},
+                {"exp(-((x-1)/1.5)**2)", 1.0, 1.0},
+            };
+            for (const auto& c : cases) {
+                Eigen::ArrayXd xv(1);
+                xv(0) = c.x;
+                double got = evaluate(c.expr, xv)(0);
+                std::cout << "  " << c.expr << " @ x=" << c.x << " -> " << got
+                          << " (期待値 " << c.want << ")" << std::endl;
+                check(std::fabs(got - c.want) <= std::max(1e-9, std::fabs(c.want) * 1e-6), c.expr);
+            }
+        }
+
         section("三項 (if/else) と比較演算子");
         {
             Eigen::ArrayXd x = linspace(-2, 2, 5);  // -2,-1,0,1,2
@@ -100,6 +126,34 @@ int main() {
             check(std::fabs(res.values[0] - 2.0) < 0.2, "linear a");
             check(std::fabs(res.values[1] - 3.0) < 0.05, "linear b");
             check(res.r2 > 0.99, "linear r2");
+        }
+
+        section("ガウスプリセットでのフィッティング (データはパーサを使わずに作る)");
+        {
+            // データ生成にパーサを使うと、式の解釈が間違っていても生成側と
+            // フィット側で打ち消し合って通ってしまう。ここは C++ で直接
+            // 計算した値を使い、パーサの解釈が正しいことまで含めて確かめる。
+            const Preset* gauss = nullptr;
+            for (const auto& p : presets())
+                if (p.name.rfind("ガウス", 0) == 0) gauss = &p;
+            check(gauss != nullptr, "gauss preset exists");
+
+            const double A = 3.0, B = 1.0, C = 1.5;
+            Eigen::ArrayXd x = linspace(-6, 6, 120);
+            Eigen::ArrayXd y(x.size());
+            for (Eigen::Index i = 0; i < x.size(); ++i) {
+                const double t = (x(i) - B) / C;
+                y(i) = A * std::exp(-t * t) + noise01(rng);
+            }
+
+            FitResult res = fit(x, y, gauss->expr, gauss->params, {1.0, 0.0, 1.0});
+            std::cout << "  a=" << res.values[0] << " b=" << res.values[1]
+                      << " c=" << std::fabs(res.values[2])
+                      << " (真値 3, 1, 1.5)  R2=" << res.r2 << std::endl;
+            check(std::fabs(res.values[0] - A) < 0.05, "gauss a");
+            check(std::fabs(res.values[1] - B) < 0.05, "gauss b");
+            check(std::fabs(std::fabs(res.values[2]) - C) < 0.05, "gauss c");
+            check(res.r2 > 0.99, "gauss r2");
         }
 
         section("Voigt プリセットでのフィッティング (自己整合性チェック)");
